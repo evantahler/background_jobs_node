@@ -1,19 +1,23 @@
 var cluster    = require('cluster');
 var http       = require('http');
 var nodemailer = require('nodemailer');
-var httpPort   = 8080 || process.env.port;
+var httpPort   = process.env.PORT || 8080;
+var httpHost   = process.env.HOST || '127.0.0.1';
 var children   = {};
 var emails     = [];
 
 var transporter = nodemailer.createTransport({
   service: 'gmail',
-  auth: { user: require('./.emailUsername'), pass: require('./.emailPassword') }
+  auth: {
+    user: require('./.emailUsername'),
+    pass: require('./.emailPassword')
+  }
 });
 
 var log = function(p, msg){
   var name, pid;
-  if(p.name !== undefined){ 
-    name = p.name; 
+  if(p.name !== undefined){
+    name = p.name;
     pid  = p.process.pid;
   }else{
     name = 'master';
@@ -36,8 +40,8 @@ var doMasterStuff = function(){
       children.server = cluster.fork({ROLE: 'server'});
       children.server.name = 'web server';
       children.server.on('online',    function(){ log(children.server, 'ready on port ' + httpPort); });
-      children.server.on('exit',      function(){ 
-        log(children.server, 'died :('); 
+      children.server.on('exit',      function(){
+        log(children.server, 'died :(');
         delete children.server;
       });
       children.server.on('message',   function(message){
@@ -53,8 +57,8 @@ var doMasterStuff = function(){
       children.worker = cluster.fork({ROLE: 'worker'});
       children.worker.name = 'email worker';
       children.worker.on('online',    function(){ log(children.worker, 'ready!'); });
-      children.worker.on('exit',      function(){ 
-        log(children.worker, 'died :('); 
+      children.worker.on('exit',      function(){
+        log(children.worker, 'died :(');
         delete children.worker;
       });
       children.worker.on('message',   function(message){
@@ -70,9 +74,9 @@ var doServerStuff = function(){
   var server = function(req, res){
     var urlParts = req.url.split('/');
     var email    = {
-      to:      urlParts[1],
-      subject: urlParts[2],
-      text:    urlParts[3]
+      to:      decodeURI(urlParts[1]),
+      subject: decodeURI(urlParts[2]),
+      text:    decodeURI(urlParts[3]),
     };
 
     var response = {email: email};
@@ -82,7 +86,7 @@ var doServerStuff = function(){
     process.send(email);
   };
 
-  http.createServer(server).listen(httpPort);
+  http.createServer(server).listen(httpPort, '127.0.0.1');
 };
 
 var doWorkerStuff = function(){
@@ -93,9 +97,9 @@ var doWorkerStuff = function(){
   var sendEmail = function(to, subject, text, callback){
     var email = {
       from:    require('./.emailUsername'),
-      to:      to,
-      subject: subject,
-      text:    text,
+      to:      decodeURI(urlParts[1]),
+      subject: decodeURI(urlParts[2]),
+      text:    decodeURI(urlParts[3]),
     };
 
     transporter.sendMail(email, function(error, info){
