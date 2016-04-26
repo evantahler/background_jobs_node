@@ -1,15 +1,17 @@
 {
   "name": "background_jobs_node",
   "version": "1.0.0",
-  "description": "https://docs.google.com/presentation/d/1SjGcxs_oAk_-UgI2qP581NSJRBQDE15euRpPhE4DZjs",
-  "main": "foreground.js",
-  "scripts": {
-    "test": "npm test"
-  },
+  "description": "An example of using node and redis for all types of crazy background jobs",
   "author": "evan tahler",
   "license": "ISC",
   "dependencies": {
-    "node-resque": "^0.11.5",
-    "nodemailer": "^1.3.0"
+    "async": "^2.0.0-rc.3",
+    "ioredis": "^1.15.1",
+    "node-resque": "^2.0.3",
+    "nodemailer": "^2.3.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/evantahler/background_jobs_node.git"
   }
 }
