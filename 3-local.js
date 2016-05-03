@@ -86,7 +86,7 @@ var doServerStuff = function(){
     process.send(email);
   };
 
-  http.createServer(server).listen(httpPort, '127.0.0.1');
+  http.createServer(server).listen(httpPort, httpHost);
 };
 
 var doWorkerStuff = function(){
@@ -97,9 +97,9 @@ var doWorkerStuff = function(){
   var sendEmail = function(to, subject, text, callback){
     var email = {
       from:    require('./.emailUsername'),
-      to:      decodeURI(urlParts[1]),
-      subject: decodeURI(urlParts[2]),
-      text:    decodeURI(urlParts[3]),
+      to:      to,
+      subject: subject,
+      text:    text,
     };
 
     transporter.sendMail(email, function(error, info){
