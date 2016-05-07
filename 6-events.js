@@ -1,8 +1,20 @@
-var nodemailer = require('nodemailer');
-var httpPort   = process.env.PORT || 8080;
-var httpHost   = process.env.HOST || '127.0.0.1';
-var redis      = require('ioredis');
-var async      = require('async');
+var nodemailer   = require('nodemailer');
+var EventEmitter = require('events').EventEmitter;
+var redis        = require('ioredis');
+var async        = require('async');
+var util         = require('util');
+var http         = require('http');
+var fs           = require('fs');
+
+var httpPort = process.env.PORT || 8080;
+var httpHost = process.env.HOST || '127.0.0.1';
+
+var connectionDetails = {
+  host:      "127.0.0.1",
+  password:  "",
+  port:      6379,
+  database:  0,
+};
 
 var transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -16,35 +28,22 @@ var transporter = nodemailer.createTransport({
 // EVENTR //
 ////////////
 
-var eventr = function(name, connectionDetails){
+var eventr = function(name, connectionDetails, handlers){
   this.redis = new redis(connectionDetails);
   this.name = name;
   this.prefix = 'eventr:';
   this.partitionSizeInSeconds = 60;
-  this.partitionDriftAllotmentSeconds = 30;
+  this.handlers = handlers;
+  this.sleepTime = 1000 * 5;
 
-  var luaLines = [];
-  // get the counter for this named consumer
-  luaLines.push('local counter = 0');
-  luaLines.push('if redis.call("HEXISTS", "' + this.prefix + 'counters", KEYS[1]) == 1 then');
-  luaLines.push('  local counter = redis.call("HGET", "' + this.prefix + 'counters", KEYS[1])');
-  luaLines.push('end');
-  // if the partition exists, get the data from that key
-  // otherwise + the partition and end
-  luaLines.push('local partition = "' + this.prefix + 'partitions:" .. KEYS[2]');
-  luaLines.push('if reids.call("EXISTS", partition) == 0 then');
-  luaLines.push('  retun nil');
-  luaLines.push('else ');
-  luaLines.push('  local event = reids.call("LRANGE", partition, counter, counter)');
-  luaLines.push('  reids.call("HSET", "' + this.prefix + ':counters", (counter + 1))');
-  luaLines.push('  return event');
-  luaLines.push('end');
-
-
+  var lua = fs.readFileSync(__dirname + '/6-lua.lua').toString();
   this.redis.defineCommand('getAndIncr', {
-    numberOfKeys: 2, lua: luaLines.join('\r\n')
+    numberOfKeys: 0,
+     lua: lua
   });
 };
+
+util.inherits(eventr, EventEmitter);
 
 eventr.prototype.write = function(payload, callback){
   var self = this;
@@ -72,6 +71,35 @@ eventr.prototype.ensurePartition = function(partition, callback){
   self.redis.zadd(self.prefix + 'partitions', partition, partition, callback);
 }
 
+eventr.prototype.work = function(){
+  var self = this;
+  var jobs = [];
+  self.next(function(error, partition, event){
+    if(error){ self.emit('error', error); }
+    if(!event){
+      self.emit('pause', partition);
+      return setTimeout(function(){
+        self.work.call(self);
+      }, self.sleepTime);
+    }else{
+      self.emit('event', partition, event);
+      self.handlers.forEach(function(handler){
+        jobs.push(function(next){
+          handler.perform(event, function(error, result){
+            if(error){ self.emit('error', handler.name, error); }
+            else{ self.emit('success', handler.name, result); }
+            next();
+          });
+        });
+      });
+
+      async.series(jobs, function(){
+        self.work.call(self);
+      });
+    }
+  });
+}
+
 eventr.prototype.next = function(callback){
   var self = this;
   var jobs = [];
@@ -83,11 +111,13 @@ eventr.prototype.next = function(callback){
   jobs.push(function(next){
     self.redis.hget(self.prefix + 'client_partitions', self.name, function(error, p){
       if(error){ return next(error); }
+      if(p && p.length === 0){ p = null; }
       if(!p){
         self.firstPartition(function(error, p){
           if(error){ return next(error); }
+          if(p && p.length === 0){ p = null; }
           if(p){ partition = p; }
-          return next();
+          self.redis.hset(self.prefix + 'client_partitions', self.name, partition, next);
         })
       }else{
         partition = p;
@@ -99,9 +129,10 @@ eventr.prototype.next = function(callback){
   // get the next key in this partition and slide the cursor atomically
   jobs.push(function(next){
     if(!partition){ return next(); }
+    self.emit('poll', partition);
     self.redis.getAndIncr(self.name, partition, function(error, e){
       if(error){ return next(error); }
-      if(e){ event = e; }
+      if(e){ event = JSON.parse(e); }
       return next();
     });
   });
@@ -122,16 +153,65 @@ eventr.prototype.next = function(callback){
   });
 };
 
-//////////
-// TEST //
-//////////
+////////////////
+// WEB SERVER //
+////////////////
 
-e = new eventr('testr');
-e.write({name: 'user_created'}, function(error){
-  if(error){ console.log(error); }
-  console.log("wrote...");
-  e.next(function(error, event){
-    console.log(error)
-    console.log(event)
+var server = function(req, res){
+  var urlParts = req.url.split('/');
+  var email    = {
+    to:      decodeURI(urlParts[1]),
+    subject: decodeURI(urlParts[2]),
+    text:    decodeURI(urlParts[3]),
+  };
+
+  producer.write({
+    eventName: 'emailEvent',
+    email: email
+  }, function(error){
+    if(error){ console.log(error) }
+    var response = {email: email};
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify(response, null, 2));
   });
-});
+};
+
+var producer = new eventr('webApp', connectionDetails);
+http.createServer(server).listen(httpPort, httpHost);
+console.log('Server running at ' + httpHost + ':' + httpPort);
+console.log('send an email and message to /TO_ADDRESS/SUBJECT/YOUR_MESSAGE');
+
+//////////////
+// CONSUMER //
+//////////////
+var handlers = [
+  {
+    name: 'email handler',
+    perform: function(event, callback){
+      if(event.eventName === 'emailEvent'){
+        var email = {
+          from:    require('./.emailUsername'),
+          to:      event.email.to,
+          subject: event.email.subject,
+          text:    event.email.text,
+        };
+
+        transporter.sendMail(email, function(error, info){
+          callback(error, {email: email, info: info});
+        });
+      }else{
+        return callback();
+      }
+    }
+  }
+];
+
+var consumer = new eventr('myApp', connectionDetails, handlers);
+
+consumer.on('error', function(error){ console.log('consumer error: ' + error); })
+consumer.on('pause', function(partition){ console.log('consumer paused'); })
+consumer.on('event', function(partition, event){ console.log('consumer found event: ' + event  + ' on partition ' + partition); })
+consumer.on('success', function(handler, results){ console.log('consumer success on handler: ' + handler); })
+consumer.on('poll', function(partition){ console.log('consumer polling: ' + partition); })
+
+consumer.work();
