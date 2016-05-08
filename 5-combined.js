@@ -47,6 +47,7 @@ var server = function(req, res){
   };
 
   queue.enqueue('emailQueue', "sendEmail", email, function(error){
+    console.log('email :' + JSON.stringify(email));
     if(error){ console.log(error) }
     var response = {email: email};
     res.writeHead(200, {'Content-Type': 'application/json'});

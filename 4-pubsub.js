@@ -26,6 +26,7 @@ var doServerStuff = function(){
     };
 
     publisher.publish(channel, JSON.stringify(email), function(){
+      console.log('email :' + JSON.stringify(email));
       var response = {email: email};
       res.writeHead(200, {'Content-Type': 'application/json'});
       res.end(JSON.stringify(response, null, 2));

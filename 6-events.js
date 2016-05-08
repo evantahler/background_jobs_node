@@ -185,6 +185,7 @@ var server = function(req, res){
     email: email
   }, function(error){
     if(error){ console.log(error) }
+    console.log('email :' + JSON.stringify(email));
     var response = {email: email};
     res.writeHead(200, {'Content-Type': 'application/json'});
     res.end(JSON.stringify(response, null, 2));
@@ -199,6 +200,7 @@ console.log('send an email and message to /TO_ADDRESS/SUBJECT/YOUR_MESSAGE');
 //////////////
 // CONSUMER //
 //////////////
+
 var handlers = [
   {
     name: 'email handler',
