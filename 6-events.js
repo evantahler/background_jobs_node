@@ -63,7 +63,21 @@ eventr.prototype.nowPartition = function(){
 
 eventr.prototype.firstPartition = function(callback){
   var self = this;
-  self.redis.zrange(self.prefix + 'partitions', 0, 0, callback);
+  self.redis.zrange(self.prefix + 'partitions', 0, 0, function(error, partitions){
+    if(error){ return callback(error); }
+    return callback(null, partitions[0]);
+  });
+}
+
+eventr.prototype.nextPartition = function(partition, callback){
+  var self = this;
+  self.redis.zrank(self.prefix + 'partitions', partition, function(error, position){
+    if(error){ return callback(error); }
+    self.redis.zrange(self.prefix + 'partitions', (position + 1), (position + 1), function(error, partitions){
+      if(error){ return callback(error); }
+      return callback(null, partitions[0]);
+    });
+  });
 }
 
 eventr.prototype.ensurePartition = function(partition, callback){
@@ -111,11 +125,9 @@ eventr.prototype.next = function(callback){
   jobs.push(function(next){
     self.redis.hget(self.prefix + 'client_partitions', self.name, function(error, p){
       if(error){ return next(error); }
-      if(p && p.length === 0){ p = null; }
       if(!p){
         self.firstPartition(function(error, p){
           if(error){ return next(error); }
-          if(p && p.length === 0){ p = null; }
           if(p){ partition = p; }
           self.redis.hset(self.prefix + 'client_partitions', self.name, partition, next);
         })
@@ -137,14 +149,17 @@ eventr.prototype.next = function(callback){
     });
   });
 
-  // if we got no event, and we are sufffiecently in the future, try a new partition
+  // if we got no event, and we are sufffiecently in the future, try the next partition
   jobs.push(function(next){
-    if(event){ return next(); }
     if(!partition){ return next(); }
-    if( self.nowPartition() > partition ){
-      partition++; //TODO: we can speed this up by checking the ZSETS of partition names
-      self.redis.hset(self.prefix + 'client_partitions', self.name, partition, next);
-    }
+    if(event){ return next(); }
+    self.nextPartition(partition, function(error, nextPartition){
+      if(nextPartition){
+        self.redis.hset(self.prefix + 'client_partitions', self.name, nextPartition, next);
+      }else{
+        next();
+      }
+    });
   });
 
   async.series(jobs, function(error){
@@ -210,8 +225,8 @@ var consumer = new eventr('myApp', connectionDetails, handlers);
 
 consumer.on('error', function(error){ console.log('consumer error: ' + error); })
 consumer.on('pause', function(partition){ console.log('consumer paused'); })
-consumer.on('event', function(partition, event){ console.log('consumer found event: ' + event  + ' on partition ' + partition); })
+consumer.on('event', function(partition, event){ console.log('consumer found event: ' + JSON.stringify(event)  + ' on partition ' + partition); })
 consumer.on('success', function(handler, results){ console.log('consumer success on handler: ' + handler); })
-consumer.on('poll', function(partition){ console.log('consumer polling: ' + partition); })
+consumer.on('poll', function(partition){ console.log('consumer polling partition: ' + partition); })
 
 consumer.work();

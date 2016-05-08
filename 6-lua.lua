@@ -1,10 +1,11 @@
 local name = ARGV[1]
 local partition = "eventr:partitions:" .. ARGV[2]
+local coutnerKey = "eventr:counters:" .. ARGV[2]
 
 -- If we have a key already for this name, look it up
 local counter = 0
-if redis.call("HEXISTS", "eventr:counters", name) == 1 then
-  counter = redis.call("HGET", "eventr:counters", name)
+if redis.call("HEXISTS", coutnerKey, name) == 1 then
+  counter = redis.call("HGET", coutnerKey, name)
   counter = tonumber(counter)
 end
 
@@ -13,8 +14,8 @@ if redis.call("EXISTS", partition) == 0 then
   return nil
 else
   local event = redis.call("LRANGE", partition, counter, counter)
-  if event then
-    redis.call("HSET", "eventr:counters", name, (counter + 1))
+  if (event and  event[1] ~= nil) then
+    redis.call("HSET", coutnerKey, name, (counter + 1))
     return event[1]
   else
     return nil
